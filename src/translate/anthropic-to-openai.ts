@@ -141,11 +141,11 @@ function userToOpenAIMessages(content: AnthropicContentBlock[] | string): OpenAI
   // Group text into a single user message; convert each image to its own
   // content part; pair each tool_result with a tool-role message.
   const out: OpenAIMessage[] = [];
-  const parts: UserContentPartInternal[] = [];
+  let parts: UserContentPartInternal[] = [];
   const flushParts = () => {
     if (parts.length === 0) return;
     out.push({ role: "user", content: parts });
-    parts.length = 0;
+    parts = []; // re-bind so the pushed message keeps a stable array
   };
   const pushText = (text: string) => {
     const last = parts[parts.length - 1];
