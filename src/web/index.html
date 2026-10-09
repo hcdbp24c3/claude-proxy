@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>claude-proxy dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161a22;
+      --panel-2: #1d2230;
+      --border: #2a3142;
+      --text: #e6e8ee;
+      --muted: #8b93a7;
+      --accent: #f0883e;
+      --accent-2: #58a6ff;
+      --ok: #3fb950;
+      --err: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    header { padding: 18px 28px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; }
+    header h1 { font-size: 18px; margin: 0; }
+    header .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 4px 10px; border-radius: 999px; color: var(--muted); font-size: 12px; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 22px; }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    section h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .row label { width: 110px; color: var(--muted); font-size: 12px; }
+    .row input, .row select { flex: 1; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; }
+    .row input:focus { outline: 2px solid var(--accent-2); }
+    button { background: var(--accent); color: #000; border: 0; padding: 7px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    code { background: var(--panel-2); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+    .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+    .status-line { font-size: 12px; color: var(--muted); }
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    details { background: var(--panel-2); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; }
+    summary { cursor: pointer; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>claude-proxy</h1>
+    <span class="pill" id="status">loading…</span>
+    <span class="pill" id="listen"></span>
+  </header>
+  <main>
+    <section>
+      <h2>Providers</h2>
+      <div class="toolbar">
+        <button onclick="refreshAll()">Refresh from upstreams</button>
+        <button class="ghost" onclick="toggleAddProvider()">+ Add provider</button>
+      </div>
+      <div id="add-provider" style="display:none; margin-bottom: 12px;">
+        <div class="row"><label>id</label><input id="p-id" placeholder="openrouter" /></div>
+        <div class="row"><label>type</label>
+          <select id="p-type">
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+        </div>
+        <div class="row"><label>base url</label><input id="p-base" placeholder="https://openrouter.ai/api/v1" /></div>
+        <div class="row"><label>api key (literal)</label><input id="p-key" type="password" placeholder="(optional, prefer env)" /></div>
+        <div class="row"><label>api key env</label><input id="p-keyenv" placeholder="OPENROUTER_API_KEY" /></div>
+        <div class="row"><label>label</label><input id="p-label" placeholder="OpenRouter" /></div>
+        <div class="row"><label></label><button onclick="submitProvider()">Save</button></div>
+      </div>
+      <table id="providers-table">
+        <thead><tr><th>id</th><th>type</th><th>base url</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="providers-empty" class="empty" style="display:none;">No providers configured yet.</div>
+    </section>
+
+    <section>
+      <h2>Model aliases</h2>
+      <div class="toolbar">
+        <button class="ghost" onclick="toggleAddModel()">+ Add alias</button>
+        <button class="ghost" onclick="discoverModels()">Discover from providers</button>
+      </div>
+      <div id="add-model" style="display:none; margin-bottom: 12px;">
+        <div class="row"><label>public name</label><input id="m-name" placeholder="gpt-5" /></div>
+        <div class="row"><label>provider id</label><input id="m-provider" placeholder="openrouter" /></div>
+        <div class="row"><label>upstream model id</label><input id="m-modelid" placeholder="openai/gpt-5" /></div>
+        <div class="row"><label>label</label><input id="m-label" placeholder="GPT-5" /></div>
+        <div class="row"><label></label><button onclick="submitModel()">Save</button></div>
+        <div class="hint">The public name is what Claude Code / Desktop sees. It does <b>not</b> need to start with <code>claude</code> — the proxy rewrites the model on the way out.</div>
+      </div>
+      <table id="models-table">
+        <thead><tr><th>alias</th><th>provider</th><th>upstream id</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="models-empty" class="empty" style="display:none;">No aliases yet. Add one to expose any upstream model as a Claude-compatible name.</div>
+    </section>
+
+    <section style="grid-column: 1 / -1;">
+      <h2>How Claude Code / Desktop should connect</h2>
+      <p>Set these env vars in your shell, or copy them into the Claude Code config file:</p>
+      <pre><code id="env-exports">export ANTHROPIC_BASE_URL="…"
+export ANTHROPIC_AUTH_TOKEN="any-value"
+# Optional: pin a model
+export ANTHROPIC_MODEL="…"</code></pre>
+      <p class="hint">Claude Code rejects the request if <code>ANTHROPIC_BASE_URL</code> is not set, but accepts any token. The proxy injects the real upstream credentials on the outbound call.</p>
+    </section>
+  </main>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    let providers = [];
+    let models = [];
+
+    async function load() {
+      const s = await fetch("/healthz");
+      $("#status").textContent = s.ok ? "running" : "down";
+      $("#status").className = "pill " + (s.ok ? "ok" : "err");
+      $("#listen").textContent = location.origin;
+
+      const pr = await (await fetch("/admin/providers")).json();
+      const mr = await (await fetch("/admin/models")).json();
+      providers = pr; models = mr;
+      renderProviders();
+      renderModels();
+    }
+
+    function renderProviders() {
+      const tbody = $("#providers-table tbody");
+      tbody.innerHTML = "";
+      for (const p of providers) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td><code>${escapeHtml(p.id)}</code></td><td>${escapeHtml(p.type)}</td><td><code>${escapeHtml(p.baseUrl)}</code></td>
+          <td><button class="danger" onclick="removeProvider('${escapeAttr(p.id)}')">remove</button></td>`;
+        tbody.appendChild(tr);
+      }
+      $("#providers-empty").style.display = providers.length ? "none" : "block";
+      $("#providers-table").style.display = providers.length ? "" : "none";
+    }
+
+    function renderModels() {
+      const tbody = $("#models-table tbody");
+      tbody.innerHTML = "";
+      for (const m of models) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td><code>${escapeHtml(m.name)}</code></td><td>${escapeHtml(m.provider)}</td><td><code>${escapeHtml(m.modelId)}</code></td>
+          <td><button class="danger" onclick="removeModel('${escapeAttr(m.name)}')">remove</button></td>`;
+        tbody.appendChild(tr);
+      }
+      $("#models-empty").style.display = models.length ? "none" : "block";
+      $("#models-table").style.display = models.length ? "" : "none";
+    }
+
+    function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+    function escapeAttr(s) { return escapeHtml(s).replace(/'/g, "&#39;"); }
+
+    function toggleAddProvider() { $("#add-provider").style.display = $("#add-provider").style.display === "none" ? "" : "none"; }
+    function toggleAddModel() { $("#add-model").style.display = $("#add-model").style.display === "none" ? "" : "none"; }
+
+    async function submitProvider() {
+      const body = {
+        id: $("#p-id").value.trim(),
+        type: $("#p-type").value,
+        baseUrl: $("#p-base").value.trim(),
+        apiKey: $("#p-key").value || undefined,
+        apiKeyEnv: $("#p-keyenv").value.trim() || undefined,
+        label: $("#p-label").value.trim() || undefined,
+      };
+      if (!body.id || !body.baseUrl) return alert("id and base url required");
+      const r = await fetch("/admin/providers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) return alert(await r.text());
+      location.reload();
+    }
+
+    async function removeProvider(id) {
+      if (!confirm("Remove provider " + id + "?")) return;
+      await fetch("/admin/providers/" + encodeURIComponent(id), { method: "DELETE" });
+      location.reload();
+    }
+
+    async function submitModel() {
+      const body = {
+        name: $("#m-name").value.trim(),
+        provider: $("#m-provider").value.trim(),
+        modelId: $("#m-modelid").value.trim(),
+        label: $("#m-label").value.trim() || undefined,
+      };
+      if (!body.name || !body.provider || !body.modelId) return alert("name, provider, modelId required");
+      const r = await fetch("/admin/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) return alert(await r.text());
+      location.reload();
+    }
+
+    async function removeModel(name) {
+      if (!confirm("Remove alias " + name + "?")) return;
+      await fetch("/admin/models/" + encodeURIComponent(name), { method: "DELETE" });
+      location.reload();
+    }
+
+    async function discoverModels() {
+      for (const p of providers) {
+        if (p.type !== "openai") continue;
+        const r = await fetch("/admin/discover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: p.id }) });
+        if (r.ok) {
+          const j = await r.json();
+          alert("Discovered " + j.models.length + " models from " + p.id + ". Add them via the + Add alias form.");
+        }
+      }
+    }
+
+    async function refreshAll() { location.reload(); }
+
+    load();
+  </script>
+</body>
+</html>

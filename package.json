@@ -1,0 +1,33 @@
+{
+  "name": "claude-proxy",
+  "version": "0.1.0",
+  "description": "Universal Claude-compatible proxy: route Claude Code CLI / Claude Desktop through any OpenAI-compatible API. Discovers models, aliases arbitrary names, and bypasses the 'claude|anthropic' model-name guard.",
+  "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "claude-proxy": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts serve",
+    "build": "bun build src/cli.ts --target=bun --outdir=dist && bun build src/web/index.html --target=browser --outdir=dist/web && cp -r src/web dist/web",
+    "start": "bun run dist/cli.js serve",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "undici": "*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^26.6.4",
+    "bun-types": "latest",
+    "typescript": "^7.0.2"
+  }
+}
