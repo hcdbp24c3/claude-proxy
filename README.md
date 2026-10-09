@@ -16,20 +16,49 @@ A universal proxy that lets **Claude Code CLI** and **Claude Desktop** use **any
 
 ## Quick start
 
-### 1. Install
+### Option A — Download a prebuilt binary (no runtime needed)
+
+Grab the latest release for your platform from
+[**github.com/hcdbp24c3/claude-proxy/releases**](https://github.com/hcdbp24c3/claude-proxy/releases/latest).
+
+| Platform | Arch | File |
+|---|---|---|
+| Linux   | x86_64  | `claude-proxy-linux-x64` |
+| Linux   | arm64   | `claude-proxy-linux-arm64` |
+| macOS   | x86_64 (Intel)        | `claude-proxy-darwin-x64` |
+| macOS   | arm64 (Apple Silicon) | `claude-proxy-darwin-arm64` |
+| Windows | x86_64  | `claude-proxy-windows-x64.exe` |
+| Windows | arm64   | `claude-proxy-windows-arm64.exe` |
+
+The binaries are standalone — Bun runtime is bundled in. No `node_modules`, no extra dependencies.
 
 ```bash
-# from source
-git clone https://github.com/you/claude-proxy.git
-cd claude-proxy
-bun install
-bun run build
+# Linux
+chmod +x claude-proxy-linux-x64
+./claude-proxy-linux-x64 init
+./claude-proxy-linux-x64 serve
 
-# or via npm (coming soon)
-# npm install -g claude-proxy
+# macOS (need to allow in Gatekeeper the first time)
+xattr -d com.apple.quarantine claude-proxy-darwin-arm64
+./claude-proxy-darwin-arm64 serve
+
+# Windows (PowerShell)
+.\claude-proxy-windows-x64.exe serve
 ```
 
-Requires [Bun](https://bun.sh) ≥ 1.4. The bundled CLI runs from a single `dist/cli.js` file — no Node modules to install at runtime.
+Verify the download with `sha256sum -c SHA256SUMS`.
+
+### Option B — Install from source
+
+```bash
+git clone https://github.com/hcdbp24c3/claude-proxy.git
+cd claude-proxy
+bun install
+bun run build          # build the JS bundle
+bun run build:bin      # build standalone executables for all 6 platforms
+```
+
+Requires [Bun](https://bun.sh) ≥ 1.4. The bundled JS CLI runs from a single `dist/cli.js` file — no Node modules to install at runtime.
 
 ### 2. Configure a provider
 
