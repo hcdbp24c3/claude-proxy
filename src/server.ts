@@ -485,9 +485,27 @@ async function handleAdmin(req: Request, config: AppConfig, path: string): Promi
 }
 
 async function serveDashboard(): Promise<Response> {
-  const file = Bun.file(new URL("./web/index.html", import.meta.url));
-  if (await file.exists()) {
-    return new Response(file, { headers: { "content-type": "text/html; charset=utf-8" } });
+  // Try the bundled embedded asset first (single-file binary mode).
+  // Bun's --asset embeds files under the path passed. The asset name is
+  // derived from the source path: src/web/index.html → something like
+  // "index.html-<hash>.html" (we set --asset-naming for stability below).
+  const candidates = [
+    // Bun-asset style: source path preserved
+    "src/web/index.html",
+    "./web/index.html",
+    // Local dev (running via `bun src/cli.ts` from project root)
+    new URL("./web/index.html", import.meta.url),
+    new URL("../src/web/index.html", import.meta.url),
+    new URL("../web/index.html", import.meta.url),
+  ];
+  for (const c of candidates) {
+    const file = Bun.file(c);
+    if (await file.exists()) {
+      return new Response(file, { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
   }
-  return new Response("dashboard not built", { status: 500 });
+  return new Response(
+    "dashboard not bundled with this build. Re-run `bun run build:bin:windows` from source, or check the asset embed flag.",
+    { status: 500 },
+  );
 }

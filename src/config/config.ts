@@ -95,14 +95,26 @@ export function removeProvider(id: string, path?: string): AppConfig {
   );
 }
 
-/** Resolve env-var-style apiKeyEnv into a concrete key. */
+/** Resolve env-var-style apiKeyEnv into a concrete key. Returns "" when
+ *  nothing is configured (the provider may still be valid for local
+ *  endpoints like Ollama). */
 export function resolveApiKey(provider: ProviderConfig): string {
+  if (provider.apiKey) return provider.apiKey;
   if (provider.apiKeyEnv) {
     const v = process.env[provider.apiKeyEnv];
-    if (!v) throw new Error(`Provider ${provider.id}: env ${provider.apiKeyEnv} is unset`);
+    if (!v) {
+      const hint = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(provider.apiKeyEnv)
+        ? `set the env var (e.g. \`export ${provider.apiKeyEnv}=sk-...\` in your shell, or via the Windows Settings → Environment Variables) and restart the proxy.`
+        : `the value '${provider.apiKeyEnv}' does not look like a valid env var name (use letters/digits/_). Either fix the name, or paste the API key directly into the provider.`;
+      throw new Error(
+        `Provider '${provider.id}': env var '${provider.apiKeyEnv}' is unset.\n` +
+        `  → ${hint}\n` +
+        `  → Or run \`claude-proxy tui\` to reconfigure.`,
+      );
+    }
     return v;
   }
-  return provider.apiKey ?? "";
+  return "";
 }
 
 /** Path expansion for user overrides. */

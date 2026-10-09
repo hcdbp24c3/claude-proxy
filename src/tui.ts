@@ -136,6 +136,31 @@ async function addProviderFlow(config: AppConfig): Promise<AppConfig> {
   };
   upsertProvider(provider);
   prompts.log.success(`Added provider ${provider.id}`);
+
+  // Auto-fetch live model list and register each as an alias.
+  // This removes the friction of having to pick an alias name per model.
+  // Users can still remove/rename later via the menu.
+  const wantAuto = await prompts.confirm({
+    message: "Auto-add all upstream models as aliases? (recommended)",
+    initialValue: true,
+  });
+  if (prompts.isCancel(wantAuto)) return loadConfig();
+  if (wantAuto) {
+    const s = prompts.spinner();
+    s.start(`Fetching model list from ${provider.baseUrl}…`);
+    try {
+      const resolved = { ...provider, resolvedApiKey: provider.apiKey ?? (provider.apiKeyEnv ? process.env[provider.apiKeyEnv] ?? "" : "") };
+      const ids = await fetchModelList(resolved);
+      s.stop(`Found ${ids.length} models`);
+      for (const modelId of ids) {
+        upsertModel({ name: modelId, provider: provider.id, modelId });
+      }
+      prompts.log.success(`Registered ${ids.length} aliases. They are immediately available as model names.`);
+    } catch (e) {
+      s.stop("failed: " + (e as Error).message);
+      prompts.log.warn("Skipping auto-add. You can add models manually from the menu.");
+    }
+  }
   return loadConfig();
 }
 

@@ -18,7 +18,7 @@
  *   claude-proxy doctor               Show setup status
  *   claude-proxy env                  Print export lines for shell setup
  */
-import { loadConfig, saveConfig, updateConfig, upsertProvider, upsertModel, removeModel, removeProvider, CONFIG_PATH, DEFAULT_PORT, DEFAULT_BIND } from "./config/config.ts";
+import { loadConfig, saveConfig, updateConfig, upsertProvider, upsertModel, removeModel, removeProvider, resolveApiKey, CONFIG_PATH, DEFAULT_PORT, DEFAULT_BIND } from "./config/config.ts";
 import { startProxyServer } from "./server.ts";
 import { fetchModelList } from "./discovery/models.ts";
 import { resolveProviders } from "./router.ts";
@@ -35,7 +35,7 @@ import type { AppConfig, ModelAlias, ProviderConfig } from "./types.ts";
 const HELP = `claude-proxy — universal Claude-compatible proxy
 
 Usage:
-  claude-proxy serve [--port N] [--bind ADDR]
+  claude-proxy serve [--listen-port N] [--bind ADDR]
   claude-proxy tui
   claude-proxy init [--provider <id> --base-url <url> --api-key-env <env>]
   claude-proxy port-info [--port N]
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     case "port-info": return cmdPortInfo(rest);
     case "status": return cmdStatus();
     case "doctor": return cmdDoctor();
-    case "init": return cmdInit(rest);
+    case "init": return cmdInit(argv.slice(1));
     case "env": return cmdEnv();
     case "desktop":
       if (sub === "install") return cmdDesktopInstall(rest);
@@ -105,7 +105,7 @@ function cmdTui(): Promise<void> {
 
 async function cmdPortInfo(argv: string[]): Promise<void> {
   const opts = parseFlags(argv);
-  const port = Number(opts.port ?? process.env.PORT ?? 8765);
+  const port = Number(opts["listen-port"] ?? opts.port ?? process.env.PORT ?? 8765);
   const cmd = platform() === "win32" ? `netstat -ano | findstr :${port}` : `lsof -nP -iTCP:${port} -sTCP:LISTEN 2>/dev/null || ss -lntp 'sport = :${port}' 2>/dev/null`;
   process.stdout.write(`Looking for process listening on port ${port}…\n`);
   process.stdout.write(`Command: ${cmd}\n\n`);
@@ -141,14 +141,16 @@ async function cmdService(action: string): Promise<void> {
 async function cmdServe(argv: string[]): Promise<void> {
   const opts = parseFlags(argv);
   const config = loadConfig();
-  if (opts.port) config.port = Number(opts.port);
+  // Accept both --port (legacy) and --listen-port (avoids Bun's runtime flag).
+  const portArg = opts["listen-port"] ?? opts.port;
+  if (portArg) config.port = Number(portArg);
   if (opts.bind) config.bind = String(opts.bind);
   const port = config.port ?? DEFAULT_PORT;
   const bind = config.bind ?? DEFAULT_BIND;
   if (await probeBusy(bind, port)) {
     process.stderr.write(`fatal: port ${port} on ${bind} is already in use.\n`);
-    process.stderr.write(`\nRun \`claude-proxy port-info --port ${port}\` to see which process is listening.\n`);
-    process.stderr.write(`Or pick a different port: \`claude-proxy serve --port ${port + 1}\`\n`);
+    process.stderr.write(`\nRun \`claude-proxy port-info --listen-port ${port}\` to see which process is listening.\n`);
+    process.stderr.write(`Or pick a different port: \`claude-proxy serve --listen-port ${port + 1}\`\n`);
     process.exit(1);
   }
   const server = await startProxyServer(config);
@@ -158,6 +160,21 @@ async function cmdServe(argv: string[]): Promise<void> {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  // First-run convenience: wire Claude Code's env vars so the user can
+  // just run `claude` after the proxy comes up. Skip if the env already
+  // points at a different proxy.
+  if (!process.env.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL.includes("127.0.0.1:" + port)) {
+    try {
+      desktopInstall("claude-code");
+    } catch (e) {
+      process.stderr.write(`(could not auto-wire Claude Code: ${(e as Error).message})\n`);
+    }
+  }
+  process.stdout.write(`listening on http://${config.bind ?? DEFAULT_BIND}:${server.port}\n`);
+  process.stdout.write(`dashboard:  http://${config.bind ?? DEFAULT_BIND}:${server.port}/\n`);
+  process.stdout.write(`env:        ANTHROPIC_BASE_URL=http://${config.bind ?? DEFAULT_BIND}:${server.port}\n`);
+
   // Run forever.
   await new Promise<never>(() => {});
 }
@@ -251,22 +268,55 @@ async function cmdInit(argv: string[]): Promise<void> {
   if (opts.provider && opts["base-url"] && opts["api-key-env"]) {
     const provider: ProviderConfig = {
       id: String(opts.provider),
-      type: "openai",
+      type: (opts.type as string) === "anthropic" ? "anthropic" : "openai",
       baseUrl: String(opts["base-url"]),
       apiKeyEnv: String(opts["api-key-env"]),
+      apiKey: opts["api-key"] ? String(opts["api-key"]) : undefined,
       label: opts.label ? String(opts.label) : undefined,
     };
     upsertProvider(provider);
-    if (opts["model-id"]) {
-      const alias: ModelAlias = {
+    process.stdout.write(`wrote provider ${provider.id}\n`);
+    // Auto-fetch live models and add them all as aliases (no alias-name prompts).
+    // The user can later remove or rename any alias via `claude-proxy tui`.
+    if (!opts["skip-discover"]) {
+      try {
+        const ids = await fetchModelList({
+          ...provider,
+          resolvedApiKey: resolveApiKey({ ...provider, apiKey: provider.apiKey ?? "" }),
+        });
+        if (ids.length > 0) {
+          for (const id of ids) {
+            upsertModel({ name: id, provider: provider.id, modelId: id });
+          }
+          process.stdout.write(`discovered ${ids.length} model(s) from ${provider.baseUrl} and registered as aliases:\n`);
+          for (const id of ids) process.stdout.write(`  - ${id}\n`);
+        } else {
+          process.stdout.write(`upstream returned 0 models. Add aliases manually with \`claude-proxy models add\` or via \`claude-proxy tui\`.\n`);
+        }
+      } catch (e) {
+        process.stderr.write(`discovery failed: ${(e as Error).message}\n`);
+        if (opts["model-id"]) {
+          // Fall back to a single explicit alias if user passed --model-id.
+          upsertModel({
+            name: String(opts.provider),
+            provider: provider.id,
+            modelId: String(opts["model-id"]),
+            label: opts.label ? String(opts.label) : undefined,
+          });
+          process.stdout.write(`registered explicit alias ${opts.provider} -> ${opts["model-id"]}\n`);
+        }
+      }
+    } else if (opts["model-id"]) {
+      upsertModel({
         name: String(opts.provider),
         provider: provider.id,
         modelId: String(opts["model-id"]),
         label: opts.label ? String(opts.label) : undefined,
-      };
-      upsertModel(alias);
+      });
     }
-    process.stdout.write(`wrote config: ${CONFIG_PATH()}\n`);
+    process.stdout.write(`\nConfig: ${CONFIG_PATH()}\n`);
+    process.stdout.write(`\nNext: \`claude-proxy serve\` to start the proxy.\n`);
+    process.stdout.write(`Then run \`claude-proxy desktop install --target claude-code\` to wire Claude Code CLI automatically.\n`);
     return;
   }
   // Interactive fallback.
@@ -278,15 +328,50 @@ async function cmdInit(argv: string[]): Promise<void> {
     return promise;
   };
   const id = await ask("Provider id (e.g. openrouter): ");
+  if (!id.trim()) die("provider id is required");
   const type = (await ask("Provider type (openai|anthropic) [openai]: ")) || "openai";
-  const baseUrl = await ask("Base URL (e.g. https://openrouter.ai/api/v1): ");
-  const apiKeyEnv = await ask("Env var holding the API key: ");
-  const modelId = await ask("Default model id (e.g. anthropic/claude-3.5-sonnet): ");
-  const aliasName = await ask(`Public alias name [${id}]: `) || id;
+  const baseUrl = await ask("Base URL: ");
+  if (!baseUrl.trim()) die("base URL is required");
+  process.stdout.write("\nAPI key: enter an env var name (recommended), paste the key directly, or leave empty.\n");
+  const apiKeyInput = await ask("> ");
+  let apiKey: string | undefined;
+  let apiKeyEnv: string | undefined;
+  if (apiKeyInput.trim().length === 0) {
+    // no key
+  } else if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(apiKeyInput.trim())) {
+    apiKeyEnv = apiKeyInput.trim();
+  } else {
+    apiKey = apiKeyInput.trim();
+  }
   rl.close();
-  upsertProvider({ id, type: type as ProviderConfig["type"], baseUrl, apiKeyEnv });
-  upsertModel({ name: aliasName, provider: id, modelId });
-  process.stdout.write(`wrote config: ${CONFIG_PATH()}\n`);
+  const providerConfig: ProviderConfig = {
+    id: id.trim(),
+    type: type as ProviderConfig["type"],
+    baseUrl: baseUrl.trim(),
+    apiKey,
+    apiKeyEnv,
+  };
+  upsertProvider(providerConfig);
+  process.stdout.write(`wrote provider ${id.trim()}\n`);
+  // Auto-discover
+  try {
+    const resolved = { ...providerConfig, resolvedApiKey: resolveApiKey({ ...providerConfig, apiKey: providerConfig.apiKey ?? "" }) };
+    const ids = await fetchModelList(resolved);
+    if (ids.length > 0) {
+      for (const modelId of ids) {
+        upsertModel({ name: modelId, provider: id.trim(), modelId });
+      }
+      process.stdout.write(`discovered ${ids.length} model(s), registered as aliases:\n`);
+      for (const modelId of ids) process.stdout.write(`  - ${modelId}\n`);
+    } else {
+      process.stdout.write(`upstream returned 0 models. Add aliases with \`claude-proxy models add\` or \`claude-proxy tui\`.\n`);
+    }
+  } catch (e) {
+    process.stderr.write(`discovery failed: ${(e as Error).message}\n`);
+    process.stdout.write(`add aliases manually: \`claude-proxy models add --name <alias> --provider ${id.trim()} --model-id <upstream-id>\`\n`);
+  }
+  process.stdout.write(`\nConfig: ${CONFIG_PATH()}\n`);
+  process.stdout.write(`\nNext: \`claude-proxy serve\` to start, then \`claude-proxy desktop install --target claude-code\` to wire Claude Code.\n`);
 }
 
 async function cmdEnv(): Promise<void> {
@@ -381,7 +466,7 @@ function parseFlags(argv: string[]): Record<string, string | true> {
   const out: Record<string, string | true> = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
-    if (a === "--port" || a === "--bind" || a === "--name" || a === "--provider" ||
+    if (a === "--listen-port" || a === "--bind" || a === "--name" || a === "--provider" ||
         a === "--model-id" || a === "--label" || a === "--id" || a === "--type" ||
         a === "--base-url" || a === "--api-key" || a === "--api-key-env" ||
         a === "--target") {
