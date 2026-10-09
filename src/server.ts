@@ -63,6 +63,10 @@ export async function startProxyServer(
   const server = Bun.serve({
     hostname,
     port,
+    // SSE streams can take minutes for long generations. Default idleTimeout
+    // is 10s; bump to the max (255s ≈ 4.25 min) so we don't cut off a
+    // slow upstream mid-stream.
+    idleTimeout: 255,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
 
@@ -403,6 +407,17 @@ function copyResponse(upstream: Response): Response {
 
 function translateOpenAIError(upstream: Response, text: string): Response {
   let type = "api_error";
+  // Detect HTML error pages (Cloudflare 502, gateway errors, etc.) and
+  // produce a clean message instead of dumping the full page into the body.
+  const isHtml = /^\s*<!doctype html|<html/i.test(text);
+  if (isHtml) {
+    const firstHeading = /<h1[^>]*>([^<]+)/i.exec(text)?.[1]?.trim();
+    const status = `${upstream.status}${upstream.statusText ? " " + upstream.statusText : ""}`;
+    const message = firstHeading
+      ? `upstream returned HTML error page (${status}): ${firstHeading}`
+      : `upstream returned HTML error page (${status})`;
+    return anthropicError(upstream.status, "api_error", message);
+  }
   let message = text || `upstream error ${upstream.status}`;
   try {
     const parsed = JSON.parse(text) as { error?: { message?: string; type?: string } };
