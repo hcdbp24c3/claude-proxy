@@ -26,15 +26,19 @@ import { isatty } from "node:tty";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { platform } from "node:os";
 import { desktopInstall, desktopUninstall } from "./service/desktop.ts";
 import { runService } from "./service/manager.ts";
+import { runTUI } from "./tui.ts";
 import type { AppConfig, ModelAlias, ProviderConfig } from "./types.ts";
 
 const HELP = `claude-proxy — universal Claude-compatible proxy
 
 Usage:
   claude-proxy serve [--port N] [--bind ADDR]
+  claude-proxy tui
   claude-proxy init [--provider <id> --base-url <url> --api-key-env <env>]
+  claude-proxy port-info [--port N]
   claude-proxy status
   claude-proxy doctor
   claude-proxy stop
@@ -64,7 +68,9 @@ async function main(): Promise<void> {
   const [cmd, sub, ...rest] = argv;
   switch (cmd) {
     case "serve": case "start": return cmdServe(rest);
+    case "tui": case "ui": return cmdTui();
     case "stop": return cmdStop();
+    case "port-info": return cmdPortInfo(rest);
     case "status": return cmdStatus();
     case "doctor": return cmdDoctor();
     case "init": return cmdInit(rest);
@@ -92,6 +98,29 @@ async function main(): Promise<void> {
 }
 
 /* ----------------------------- desktop / service ----------------------------- */
+
+function cmdTui(): Promise<void> {
+  return runTUI();
+}
+
+async function cmdPortInfo(argv: string[]): Promise<void> {
+  const opts = parseFlags(argv);
+  const port = Number(opts.port ?? process.env.PORT ?? 8765);
+  const cmd = platform() === "win32" ? `netstat -ano | findstr :${port}` : `lsof -nP -iTCP:${port} -sTCP:LISTEN 2>/dev/null || ss -lntp 'sport = :${port}' 2>/dev/null`;
+  process.stdout.write(`Looking for process listening on port ${port}…\n`);
+  process.stdout.write(`Command: ${cmd}\n\n`);
+  try {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(cmd, { shell: true, stdio: "inherit" });
+    await new Promise<void>((resolve) => {
+      const { promise, resolve: r } = Promise.withResolvers<void>();
+      child.on("close", () => r());
+      resolve(promise);
+    });
+  } catch (e) {
+    process.stderr.write(`Failed: ${(e as Error).message}\n`);
+  }
+}
 
 function cmdDesktopInstall(argv: string[]): void {
   const opts = parseFlags(argv);

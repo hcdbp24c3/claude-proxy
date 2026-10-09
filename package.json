@@ -29,6 +29,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@clack/prompts": "^1.8.1",
     "undici": "*"
   },
   "devDependencies": {
