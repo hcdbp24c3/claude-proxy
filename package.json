@@ -18,6 +18,13 @@
   "scripts": {
     "dev": "bun run src/cli.ts serve",
     "build": "bun build src/cli.ts --target=bun --outdir=dist && bun build src/web/index.html --target=browser --outdir=dist/web && cp -r src/web dist/web",
+    "build:bin": "bun run build:bin:linux && bun run build:bin:linux:arm64 && bun run build:bin:macos && bun run build:bin:macos:arm64 && bun run build:bin:windows && bun run build:bin:windows:arm64",
+    "build:bin:linux": "bun build --target=bun-linux-x64 --compile src/cli.ts --outfile dist/claude-proxy-linux-x64",
+    "build:bin:linux:arm64": "bun build --target=bun-linux-aarch64 --compile src/cli.ts --outfile dist/claude-proxy-linux-arm64",
+    "build:bin:macos": "bun build --target=bun-darwin-x64 --compile src/cli.ts --outfile dist/claude-proxy-darwin-x64",
+    "build:bin:macos:arm64": "bun build --target=bun-darwin-arm64 --compile src/cli.ts --outfile dist/claude-proxy-darwin-arm64",
+    "build:bin:windows": "bun build --target=bun-windows-x64 --compile src/cli.ts --outfile dist/claude-proxy-windows-x64.exe",
+    "build:bin:windows:arm64": "bun build --target=bun-windows-aarch64 --compile src/cli.ts --outfile dist/claude-proxy-windows-arm64.exe",
     "start": "bun run dist/cli.js serve",
     "test": "bun test"
   },
