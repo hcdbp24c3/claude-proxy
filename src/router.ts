@@ -71,6 +71,14 @@ export function decideRoute(config: AppConfig, requestedModel: string): RouteDec
 
   const alias = models.find((m) => m.name === requested);
   if (!alias) {
+    // Gateway-discovered models get a "claude-" prefix injected so Claude
+    // Code's filter lets them through. Strip the prefix to find the
+    // underlying alias.
+    const stripped = requested.replace(/^claude-/i, "");
+    const alt = stripped !== requested ? models.find((m) => m.name === stripped) : undefined;
+    if (alt) {
+      return { provider: resolveProviders(config).find((p) => p.id === alt.provider)!, upstreamModel: alt.modelId, alias: alt.name, native: false };
+    }
     // Last-ditch: any model name starting with claude/anthropic is treated
     // as a passthrough so users can use Anthropic models they have creds for
     // without registering them.

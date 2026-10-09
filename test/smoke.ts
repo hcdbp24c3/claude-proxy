@@ -120,8 +120,35 @@ await assert("GET /v1/models lists aliases", async () => {
   const r = await fetch(`http://127.0.0.1:${proxyPort}/v1/models`);
   const j = (await r.json()) as { data: Array<{ id: string }> };
   const ids = j.data.map((m) => m.id);
-  if (!ids.includes("gpt-5")) throw new Error(`gpt-5 missing; got ${ids.join(",")}`);
+  // Default format is anthropic; non-claude aliases get a "claude-" prefix
+  // injected so Claude Code's filter keeps them.
+  if (!ids.includes("claude-gpt-5")) throw new Error(`claude-gpt-5 missing; got ${ids.join(",")}`);
   if (!ids.includes("claude-3-5-sonnet-latest")) throw new Error(`claude alias missing`);
+});
+
+await assert("GET /v1/models?format=openai returns raw OpenAI shape", async () => {
+  const r = await fetch(`http://127.0.0.1:${proxyPort}/v1/models?format=openai`);
+  const j = (await r.json()) as { object: string; data: Array<{ id: string; object: string }> };
+  if (j.object !== "list") throw new Error(`object=${j.object}`);
+  if (!j.data.some((m) => m.id === "gpt-5")) throw new Error(`gpt-5 missing in openai format`);
+  if (!j.data.every((m) => m.object === "model")) throw new Error(`object:model missing`);
+});
+
+await assert("stripped 'claude-' prefix routes to original alias", async () => {
+  lastUpstreamReq = null;
+  const r = await fetch(`http://127.0.0.1:${proxyPort}/v1/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-gpt-5",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "ping" }],
+    }),
+  });
+  if (r.status !== 200) throw new Error(`status ${r.status}: ${await r.text()}`);
+  if (lastUpstreamReq?.body?.model !== "gpt-5") {
+    throw new Error(`upstream model not stripped; got ${lastUpstreamReq?.body?.model}`);
+  }
 });
 
 await assert("GET /admin/providers", async () => {
@@ -253,7 +280,7 @@ await assert("discover: live GET /v1/models with refresh=1 merges upstream list"
   const r = await fetch(`http://127.0.0.1:${proxyPort}/v1/models?refresh=1`);
   const j = (await r.json()) as { data: Array<{ id: string }> };
   const ids = j.data.map((m) => m.id);
-  for (const expected of ["gpt-5-nano", "gpt-5", "deepseek-chat"]) {
+  for (const expected of ["claude-gpt-5-nano", "claude-gpt-5", "claude-deepseek-chat"]) {
     if (!ids.includes(expected)) throw new Error(`missing ${expected}; got ${ids.join(",")}`);
   }
 });

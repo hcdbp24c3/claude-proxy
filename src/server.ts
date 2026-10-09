@@ -293,26 +293,35 @@ async function streamOpenAIToAnthropic(
 /* -------------------------------- /v1/models -------------------------------- */
 
 async function handleModels(req: Request, config: AppConfig): Promise<Response> {
-  // Return all configured aliases. Optionally enrich with live discovery
-  // from each non-passthrough OpenAI provider.
+  // The Anthropic-format `/v1/models` requires:
+  //  - `id` contains "claude" or "anthropic" (case-insensitive) — Claude Code
+  //    client filters out anything that doesn't, so non-claude aliases must be
+  //    transformed to e.g. "claude-gpt-5" to surface in the picker.
+  //  - Optional `display_name` (label), `description`, `created_at` (ISO 8601).
+  //  - The bare OpenAI list is the default for direct OpenAI clients, but
+  //    Claude Code v2.1.129+ opts in via CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1.
+  // Default format is "anthropic" — that's what Claude Code v2.1.129+ expects
+  // when using gateway discovery, and the only cost of the prefix is one
+  // string-rewrite on the way back. Pass ?format=openai for the raw OpenAI
+  // shape if you need it for other clients.
+  const url = new URL(req.url);
+  const format = url.searchParams.get("format") ?? "anthropic";
+
   const providers = resolveProviders(config);
   const models = config.models ?? [];
-  const data = models
+  const baseData = models
     .filter((m: ModelAlias) => !m.hidden)
     .map((m: ModelAlias) => {
       const provider = providers.find((p) => p.id === m.provider);
-      const upstreamId = provider && provider.type === "anthropic" ? m.modelId : m.modelId;
       return {
-        id: m.name,
-        object: "model",
-        created: 0,
-        owned_by: provider?.id ?? "anthropic",
-        display_name: m.label ?? m.name,
+        publicName: m.name,
+        upstreamId: m.modelId,
+        providerId: provider?.id ?? "anthropic",
+        label: m.label,
       };
     });
 
-  // If ?refresh=1, attempt live discovery from each OpenAI provider and merge.
-  const url = new URL(req.url);
+  // Live discovery for ?refresh=1
   if (url.searchParams.get("refresh") === "1") {
     await Promise.all(
       providers
@@ -322,8 +331,8 @@ async function handleModels(req: Request, config: AppConfig): Promise<Response> 
             const live = await fetchModelList(p);
             for (const id of live) {
               if (id === "__passthrough__") continue;
-              if (data.some((d: { id: string }) => d.id === id)) continue;
-              data.push({ id, object: "model", created: 0, owned_by: p.id, display_name: id });
+              if (baseData.some((d) => d.publicName === id)) continue;
+              baseData.push({ publicName: id, upstreamId: id, providerId: p.id, label: undefined });
             }
           } catch (e) {
             log(config, `discovery failed for ${p.id}: ${(e as Error).message}`);
@@ -332,7 +341,28 @@ async function handleModels(req: Request, config: AppConfig): Promise<Response> 
     );
   }
 
-  return new Response(JSON.stringify({ object: "list", data }), {
+  const data = baseData.map((d) => {
+    if (format === "anthropic") {
+      const id = /claude|anthropic/i.test(d.publicName) ? d.publicName : `claude-${d.publicName}`;
+      return {
+        id,
+        type: "model",
+        display_name: d.label ?? d.publicName,
+        description: `Routed via claude-proxy: ${d.upstreamId} (${d.providerId})`,
+        created_at: "2025-01-01T00:00:00Z",
+      };
+    }
+    return {
+      id: d.publicName,
+      object: "model",
+      created: 0,
+      owned_by: d.providerId,
+      display_name: d.label ?? d.publicName,
+    };
+  });
+
+  const body = format === "anthropic" ? { data } : { object: "list", data };
+  return new Response(JSON.stringify(body), {
     status: 200,
     headers: { "content-type": "application/json" },
   });
