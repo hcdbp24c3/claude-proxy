@@ -7,3 +7,7 @@ dist/
 *.pid
 .claude/
 .bun/
+# Compiled binaries are published via GitHub Releases, not committed.
+dist/claude-proxy-*
+!dist/.gitkeep
+!dist/web/
