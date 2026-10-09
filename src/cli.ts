@@ -143,6 +143,14 @@ async function cmdServe(argv: string[]): Promise<void> {
   const config = loadConfig();
   if (opts.port) config.port = Number(opts.port);
   if (opts.bind) config.bind = String(opts.bind);
+  const port = config.port ?? DEFAULT_PORT;
+  const bind = config.bind ?? DEFAULT_BIND;
+  if (await probeBusy(bind, port)) {
+    process.stderr.write(`fatal: port ${port} on ${bind} is already in use.\n`);
+    process.stderr.write(`\nRun \`claude-proxy port-info --port ${port}\` to see which process is listening.\n`);
+    process.stderr.write(`Or pick a different port: \`claude-proxy serve --port ${port + 1}\`\n`);
+    process.exit(1);
+  }
   const server = await startProxyServer(config);
   const shutdown = () => {
     server.stop();
@@ -152,6 +160,15 @@ async function cmdServe(argv: string[]): Promise<void> {
   process.on("SIGTERM", shutdown);
   // Run forever.
   await new Promise<never>(() => {});
+}
+
+async function probeBusy(host: string, port: number): Promise<boolean> {
+  try {
+    const r = await fetch(`http://${host}:${port}/healthz`, { signal: AbortSignal.timeout(500) });
+    return r.status < 500;
+  } catch {
+    return false;
+  }
 }
 
 async function cmdStop(): Promise<void> {
