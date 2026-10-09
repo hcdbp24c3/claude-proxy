@@ -27,7 +27,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { platform } from "node:os";
-import { desktopInstall, desktopUninstall } from "./service/desktop.ts";
+import { desktopInstall, desktopUninstall, shellInstall, shellUninstall } from "./service/desktop.ts";
 import { runService } from "./service/manager.ts";
 import { runTUI } from "./tui.ts";
 import type { AppConfig, ModelAlias, ProviderConfig } from "./types.ts";
@@ -44,6 +44,7 @@ Usage:
   claude-proxy stop
   claude-proxy env
   claude-proxy desktop <install|uninstall> [--target <claude-code|claude-desktop>]
+  claude-proxy shell <install|uninstall>
   claude-proxy service <install|uninstall|start|stop|status>
 
   claude-proxy models list
@@ -79,6 +80,10 @@ async function main(): Promise<void> {
       if (sub === "install") return cmdDesktopInstall(rest);
       if (sub === "uninstall") return cmdDesktopUninstall(rest);
       return die(`unknown desktop subcommand: ${sub ?? ""}`);
+    case "shell":
+      if (sub === "install") return cmdShellInstall();
+      if (sub === "uninstall") return cmdShellUninstall();
+      return die(`unknown shell subcommand: ${sub ?? ""}`);
     case "service":
       if (!sub) return die("service requires: install|uninstall|start|stop|status");
       return Promise.resolve(cmdService(sub));
@@ -136,6 +141,14 @@ function cmdDesktopUninstall(argv: string[]): void {
 
 async function cmdService(action: string): Promise<void> {
   await runService(action as Parameters<typeof runService>[0]);
+}
+
+function cmdShellInstall(): void {
+  shellInstall();
+}
+
+function cmdShellUninstall(): void {
+  shellUninstall();
 }
 
 async function cmdServe(argv: string[]): Promise<void> {
