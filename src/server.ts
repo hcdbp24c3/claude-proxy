@@ -47,7 +47,7 @@ const STRIPPED_RESPONSE_HEADERS: Record<string, true> = {
 export interface ProxyServer {
   port: number;
   hostname: string;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 export async function startProxyServer(
@@ -105,7 +105,7 @@ export async function startProxyServer(
   return {
     port: server.port!,
     hostname: server.hostname ?? "127.0.0.1",
-    stop: () => server.stop(true),
+    stop: () => server.stop(true),  // returns Promise<void>
   };
 }
 

@@ -186,21 +186,13 @@ async function addModelFlow(config: AppConfig): Promise<AppConfig> {
     options: config.providers.map((pv) => ({ value: pv.id, label: `${pv.id}  (${pv.type})` })),
   });
   if (prompts.isCancel(provider)) return config;
-  // Fetch live model list with manual spinner (clack 1.x spinner returns symbol on cancel).
-  const s = prompts.spinner();
-  s.start("fetching live model list from upstream…");
-  let liveIds: string[] = [];
-  try {
-    const target = resolveProviders(config).find((x) => x.id === provider);
-    if (target) liveIds = await fetchModelList(target);
-    s.stop(`found ${liveIds.length} models`);
-  } catch (e) {
-    s.stop("failed: " + (e as Error).message);
-  }
+  // The upstream model id is the only thing that needs to be reachable.
+  // Skip the slow /models roundtrip — the user already has the model id
+  // (or can paste it). If they want a one-click picker of every upstream
+  // model, the "Discover" menu item does that in batch.
   const modelId = await prompts.text({
-    message: "Upstream model id:",
-    placeholder: liveIds[0] ?? "gpt-5-2025-01-01",
-    initialValue: liveIds[0],
+    message: "Upstream model id (paste from your provider's docs or /models list):",
+    placeholder: "gpt-5-2025-01-01",
     validate: (v) => v ? undefined : "model id is required",
   });
   if (prompts.isCancel(modelId)) return config;
@@ -351,33 +343,29 @@ async function serveFlow(config: AppConfig): Promise<void> {
   prompts.log.message("Health:     http://" + chosenBind + ":" + server.port + "/healthz");
   prompts.log.message("Models:     http://" + chosenBind + ":" + server.port + "/v1/models");
   prompts.log.info("Press Ctrl-C to stop.");
-  // Block until SIGINT/SIGTERM. After the signal we hard-exit so any
-  // lingering stdin/raw-mode state from the TUI doesn't leave the user's
-  // terminal in a broken state (typed input becoming invisible, etc).
-  const { promise, resolve } = Promise.withResolvers<void>();
-  let stopping = false;
-  const onSignal = (sig: NodeJS.Signals) => {
-    if (stopping) return;
-    stopping = true;
-    prompts.log.info(`received ${sig}, stopping…`);
-    resolve();
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-  // On Windows, console input goes through a separate path; Ctrl-C in a
-  // TTY rarely delivers SIGINT. Belt-and-suspenders: also catch SIGHUP
-  // and the platform-specific break event.
-  if (process.platform === "win32") {
-    process.once("SIGHUP", onSignal as () => void);
-  }
+  // Block until SIGINT/SIGTERM. The signal handler kicks off an async
+  // teardown that actually closes the Bun.serve socket (which is what
+  // keeps the event loop alive); awaiting the server.stop() Promise is
+  // what lets process.exit(0) actually take effect.
+  const { promise } = await new Promise<{ promise: Promise<void> }>((r) => {
+    let resolve: () => void = () => {};
+    const onSignal = async (sig: NodeJS.Signals) => {
+      prompts.log.info(`received ${sig}, stopping…`);
+      try { await server.stop(); } catch { /* already stopped */ }
+      prompts.log.success("stopped");
+      resolve();
+      // Belt-and-suspenders: force the process to leave if Bun keeps the
+      // event loop alive for any reason (e.g. a lingering open handle).
+      setTimeout(() => process.exit(0), 100);
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    if (process.platform === "win32") {
+      process.once("SIGHUP", onSignal as unknown as () => void);
+    }
+    r({ promise: new Promise<void>((rr) => { resolve = rr; }) });
+  });
   await promise;
-  server.stop();
-  prompts.log.success("stopped");
-  // Force a hard exit so the process tree (and any pending TUI state) goes
-  // away cleanly. clack's raw-mode restoration can otherwise leave the
-  // terminal in a state where the next prompt is invisible.
-  setTimeout(() => process.exit(0), 50);
-  // If we're already mid-cleanup, just exit now.
   process.exit(0);
 }
 

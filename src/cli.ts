@@ -18,7 +18,7 @@
  *   claude-proxy doctor               Show setup status
  *   claude-proxy env                  Print export lines for shell setup
  */
-import { loadConfig, saveConfig, updateConfig, upsertProvider, upsertModel, removeModel, removeProvider, resolveApiKey, CONFIG_PATH, DEFAULT_PORT, DEFAULT_BIND } from "./config/config.ts";
+import { loadConfig, saveConfig, upsertProvider, upsertModel, removeProvider, removeModel, resolveApiKey, CONFIG_PATH, DEFAULT_PORT, DEFAULT_BIND } from "./config/config.ts";
 import { startProxyServer } from "./server.ts";
 import { fetchModelList } from "./discovery/models.ts";
 import { resolveProviders } from "./router.ts";
@@ -168,20 +168,20 @@ async function cmdServe(argv: string[]): Promise<void> {
   }
   const server = await startProxyServer(config);
   let stopping = false;
-  const shutdown = (sig?: NodeJS.Signals) => {
+  const shutdown = async (sig: NodeJS.Signals) => {
     if (stopping) return;
     stopping = true;
     if (sig) process.stderr.write(`\nreceived ${sig}, stopping…\n`);
-    server.stop();
-    // Hard-exit on the next tick. On Windows, a TUI parent can otherwise
-    // hold the terminal in raw mode and the user's shell prompt never
-    // re-prints cleanly.
-    setTimeout(() => process.exit(0), 50);
+    try { await server.stop(); } catch { /* already stopped */ }
+    // `process.exit(0)` in Bun doesn't always tear down the event loop
+    // when a Bun.serve() is still alive; the await above closes the
+    // socket, and we also belt-and-suspenders with a hard timeout.
+    setTimeout(() => process.exit(0), 100);
   };
-  process.once("SIGINT", () => shutdown("SIGINT"));
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
   if (process.platform === "win32") {
-    process.once("SIGHUP", () => shutdown("SIGHUP"));
+    process.once("SIGHUP", () => void shutdown("SIGHUP"));
   }
 
   // First-run convenience: wire Claude Code's env vars so the user can
@@ -368,34 +368,21 @@ async function cmdInit(argv: string[]): Promise<void> {
     apiKey = apiKeyInput.trim();
   }
   rl.close();
-  const providerConfig: ProviderConfig = {
+  const provider: ProviderConfig = {
     id: id.trim(),
     type: type as ProviderConfig["type"],
     baseUrl: baseUrl.trim(),
     apiKey,
     apiKeyEnv,
   };
-  upsertProvider(providerConfig);
-  process.stdout.write(`wrote provider ${id.trim()}\n`);
-  // Auto-discover
-  try {
-    const resolved = { ...providerConfig, resolvedApiKey: resolveApiKey({ ...providerConfig, apiKey: providerConfig.apiKey ?? "" }) };
-    const ids = await fetchModelList(resolved);
-    if (ids.length > 0) {
-      for (const modelId of ids) {
-        upsertModel({ name: modelId, provider: id.trim(), modelId });
-      }
-      process.stdout.write(`discovered ${ids.length} model(s), registered as aliases:\n`);
-      for (const modelId of ids) process.stdout.write(`  - ${modelId}\n`);
-    } else {
-      process.stdout.write(`upstream returned 0 models. Add aliases with \`claude-proxy models add\` or \`claude-proxy tui\`.\n`);
-    }
-  } catch (e) {
-    process.stderr.write(`discovery failed: ${(e as Error).message}\n`);
-    process.stdout.write(`add aliases manually: \`claude-proxy models add --name <alias> --provider ${id.trim()} --model-id <upstream-id>\`\n`);
-  }
-  process.stdout.write(`\nConfig: ${CONFIG_PATH()}\n`);
-  process.stdout.write(`\nNext: \`claude-proxy serve\` to start, then \`claude-proxy desktop install --target claude-code\` to wire Claude Code.\n`);
+  upsertProvider(provider);
+  process.stdout.write(`added provider ${provider.id}\n`);
+  // Note: we deliberately do NOT auto-discover models here — many
+  // upstreams have hundreds of models and the request can take a while.
+  // The user can run `claude-proxy models discover --provider <id>` to
+  // fetch them in batch, or add aliases one at a time.
+  process.stdout.write(`\nNext: \`claude-proxy models discover --provider ${provider.id}\` to fetch models, or add aliases manually with \`claude-proxy models add\`.\n`);
+  process.stdout.write(`Then \`claude-proxy serve\` to start the proxy.\n`);
 }
 
 async function cmdEnv(): Promise<void> {
