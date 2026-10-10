@@ -87,10 +87,10 @@ function installClaudeCode(): void {
       ? existing.model
       : anthropicNamed[0]!.name;
     existing.modelPicker = {
-      // Don't replace built-ins — append to them. Claude Code merges lineups
-      // when `replaceBuiltInOptions` is not set, so the user's pickers stay.
-      lines: [
-        { model: anchor, description: "Default for new sessions" },
+      // `options` is the schema name. Each row is { model, label?, description? }.
+      // Claude Code merges this list with the built-in lineup.
+      options: [
+        { model: anchor, label: "Default", description: "Default for new sessions" },
         ...anthropicNamed
           .filter((m) => m.name !== anchor)
           .slice(0, 8)
@@ -98,7 +98,8 @@ function installClaudeCode(): void {
             // Don't double-prefix when the alias already starts with claude-/
             // anthropic-; the router strips one prefix back off on inbound.
             model: /^(claude|anthropic)-/i.test(m.name) ? m.name : `claude-${m.name}`,
-            description: m.label ?? `routed via claude-proxy → ${m.name}`,
+            label: m.label ?? m.name,
+            description: `routed via claude-proxy → ${m.name}`,
           })),
       ],
     };
