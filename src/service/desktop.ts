@@ -43,6 +43,16 @@ function installClaudeCode(): void {
   // anything in the shell.
   env.ANTHROPIC_BASE_URL = `http://${host}`;
   env.ANTHROPIC_AUTH_TOKEN = env.ANTHROPIC_AUTH_TOKEN ?? "claude-proxy";
+  // Opt in to gateway model discovery. Per the official docs, this is the
+  // single env var that triggers `claude` to query `GET /v1/models` on
+  // startup and populate the /model picker with our aliases. Importantly,
+  // do NOT set `CLAUDE_CODE_USE_GATEWAY=1` here — that flag puts Claude Code
+  // into a strict "this token must authenticate with the real Anthropic API"
+  // mode, which silently disables discovery for any gateway that forwards
+  // to a non-Anthropic upstream (the entire point of this proxy). The
+  // docs are explicit: discovery does not run when any CLAUDE_CODE_USE_*
+  // provider variable is set.
+  env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1";
   // Suppress the "model isn't described by this version's model catalog"
   // warning — every alias on the proxy is technically unknown to Claude
   // Code, but the proxy translates correctly.
@@ -75,41 +85,11 @@ function installClaudeCode(): void {
     }
   }
 
-  // Build a `modelPicker` lineup from the current proxy config so the
-  // /model picker shows every alias registered in the proxy. We only
-  // add aliases whose names already contain "claude" or "anthropic" so
-  // the picker's filter (which keeps entries with those substrings) does
-  // not silently drop them; for everything else, the user can still
-  // switch with `claude --model <name>`.
-  const anthropicNamed = cfg.models.filter((m) => /claude|anthropic/i.test(m.name));
-  if (anthropicNamed.length > 0) {
-    const anchor = (typeof existing.model === "string" && /claude|anthropic/i.test(existing.model))
-      ? existing.model
-      : anthropicNamed[0]!.name;
-    existing.modelPicker = {
-      // `options` is the schema name. Each row is { model, label?, description? }.
-      // Claude Code merges this list with the built-in lineup.
-      options: [
-        { model: anchor, label: "Default", description: "Default for new sessions" },
-        ...anthropicNamed
-          .filter((m) => m.name !== anchor)
-          .slice(0, 8)
-          .map((m) => ({
-            // Don't double-prefix when the alias already starts with claude-/
-            // anthropic-; the router strips one prefix back off on inbound.
-            model: /^(claude|anthropic)-/i.test(m.name) ? m.name : `claude-${m.name}`,
-            label: m.label ?? m.name,
-            description: `routed via claude-proxy → ${m.name}`,
-          })),
-      ],
-    };
-  }
-
   writeFileSync(settingsPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
   process.stdout.write(`wrote ${settingsPath}\n`);
   process.stdout.write(`  ANTHROPIC_BASE_URL=http://${host}\n`);
+  process.stdout.write(`  CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n`);
   process.stdout.write(`  default model=${String(existing.model)}\n`);
-  process.stdout.write(`  modelPicker: ${anthropicNamed.length} alias(es) registered\n`);
 }
 
 function uninstallClaudeCode(): void {
@@ -123,7 +103,6 @@ function uninstallClaudeCode(): void {
     const env = (j.env && typeof j.env === "object" ? j.env : {}) as Record<string, unknown>;
     delete env.ANTHROPIC_BASE_URL;
     delete env.ANTHROPIC_AUTH_TOKEN;
-    delete env.CLAUDE_CODE_USE_GATEWAY;
     delete env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY;
     delete env.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT;
     delete env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
@@ -210,7 +189,6 @@ export function shellInstall(): void {
   const lines = [
     `export ANTHROPIC_BASE_URL="http://${host}"`,
     `export ANTHROPIC_AUTH_TOKEN="claude-proxy"`,
-    `export CLAUDE_CODE_USE_GATEWAY=1`,
     `export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`,
     `export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`,
     `export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`,
