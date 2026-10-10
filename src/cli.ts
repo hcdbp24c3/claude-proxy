@@ -167,12 +167,22 @@ async function cmdServe(argv: string[]): Promise<void> {
     process.exit(1);
   }
   const server = await startProxyServer(config);
-  const shutdown = () => {
+  let stopping = false;
+  const shutdown = (sig?: NodeJS.Signals) => {
+    if (stopping) return;
+    stopping = true;
+    if (sig) process.stderr.write(`\nreceived ${sig}, stopping…\n`);
     server.stop();
-    process.exit(0);
+    // Hard-exit on the next tick. On Windows, a TUI parent can otherwise
+    // hold the terminal in raw mode and the user's shell prompt never
+    // re-prints cleanly.
+    setTimeout(() => process.exit(0), 50);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  if (process.platform === "win32") {
+    process.once("SIGHUP", () => shutdown("SIGHUP"));
+  }
 
   // First-run convenience: wire Claude Code's env vars so the user can
   // just run `claude` after the proxy comes up. Skip if the env already
@@ -188,7 +198,8 @@ async function cmdServe(argv: string[]): Promise<void> {
   process.stdout.write(`dashboard:  http://${config.bind ?? DEFAULT_BIND}:${server.port}/\n`);
   process.stdout.write(`env:        ANTHROPIC_BASE_URL=http://${config.bind ?? DEFAULT_BIND}:${server.port}\n`);
 
-  // Run forever.
+  // Run forever. The signal handlers above call process.exit on the next tick,
+  // so this promise is only awaited while we're still serving traffic.
   await new Promise<never>(() => {});
 }
 

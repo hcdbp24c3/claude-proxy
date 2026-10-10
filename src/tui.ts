@@ -351,13 +351,34 @@ async function serveFlow(config: AppConfig): Promise<void> {
   prompts.log.message("Health:     http://" + chosenBind + ":" + server.port + "/healthz");
   prompts.log.message("Models:     http://" + chosenBind + ":" + server.port + "/v1/models");
   prompts.log.info("Press Ctrl-C to stop.");
-  // Block until SIGINT/SIGTERM.
+  // Block until SIGINT/SIGTERM. After the signal we hard-exit so any
+  // lingering stdin/raw-mode state from the TUI doesn't leave the user's
+  // terminal in a broken state (typed input becoming invisible, etc).
   const { promise, resolve } = Promise.withResolvers<void>();
-  process.on("SIGINT", () => resolve());
-  process.on("SIGTERM", () => resolve());
+  let stopping = false;
+  const onSignal = (sig: NodeJS.Signals) => {
+    if (stopping) return;
+    stopping = true;
+    prompts.log.info(`received ${sig}, stopping…`);
+    resolve();
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  // On Windows, console input goes through a separate path; Ctrl-C in a
+  // TTY rarely delivers SIGINT. Belt-and-suspenders: also catch SIGHUP
+  // and the platform-specific break event.
+  if (process.platform === "win32") {
+    process.once("SIGHUP", onSignal as () => void);
+  }
   await promise;
   server.stop();
   prompts.log.success("stopped");
+  // Force a hard exit so the process tree (and any pending TUI state) goes
+  // away cleanly. clack's raw-mode restoration can otherwise leave the
+  // terminal in a state where the next prompt is invisible.
+  setTimeout(() => process.exit(0), 50);
+  // If we're already mid-cleanup, just exit now.
+  process.exit(0);
 }
 
 /** Cheap TCP probe to detect a busy port before Bun hands us a fatal error. */
