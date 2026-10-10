@@ -43,9 +43,6 @@ function installClaudeCode(): void {
   // anything in the shell.
   env.ANTHROPIC_BASE_URL = `http://${host}`;
   env.ANTHROPIC_AUTH_TOKEN = env.ANTHROPIC_AUTH_TOKEN ?? "claude-proxy";
-  // Opt in to gateway model discovery so /model shows every alias registered
-  // in the proxy (and the upstream models live-discovered by `init`).
-  env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = "1";
   // Suppress the "model isn't described by this version's model catalog"
   // warning — every alias on the proxy is technically unknown to Claude
   // Code, but the proxy translates correctly.
@@ -60,10 +57,45 @@ function installClaudeCode(): void {
     env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-3-5-haiku-latest";
   }
   existing.env = env;
+
+  // Set the default model. When the user runs /model, the picker is
+  // anchored to this name. We also write a `modelPicker` lineup so that
+  // the registered aliases show up as additional rows in the picker
+  // (Claude Code shows Anthropic model IDs that aren't built-in aliases
+  // as their own labeled rows when reachable through ANTHROPIC_BASE_URL).
+  if (!existing.model) {
+    existing.model = "claude-3-5-haiku-latest";
+  }
+
+  // Build a `modelPicker` lineup from the current proxy config so the
+  // /model picker shows every alias registered in the proxy. We only
+  // add aliases whose names already contain "claude" or "anthropic" so
+  // the picker's filter (which keeps entries with those substrings) does
+  // not silently drop them; for everything else, the user can still
+  // switch with `claude --model <name>`.
+  const pickerCfg = loadConfig();
+  const anthropicNamed = pickerCfg.models.filter((m) => /claude|anthropic/i.test(m.name));
+  if (anthropicNamed.length > 0) {
+    existing.modelPicker = {
+      // Don't replace built-ins — append to them. Claude Code merges lineups
+      // when `replaceBuiltInOptions` is not set, so the user's pickers stay.
+      lines: [
+        { model: "haiku", description: "Fast, low-cost tasks" },
+        ...anthropicNamed.slice(0, 8).map((m) => ({
+          // Don't double-prefix when the alias already starts with claude-/
+          // anthropic-; the router strips one prefix back off on inbound.
+          model: /^(claude|anthropic)-/i.test(m.name) ? m.name : `claude-${m.name}`,
+          description: m.label ?? `routed via claude-proxy → ${m.name}`,
+        })),
+      ],
+    };
+  }
+
   writeFileSync(settingsPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
   process.stdout.write(`wrote ${settingsPath}\n`);
   process.stdout.write(`  ANTHROPIC_BASE_URL=http://${host}\n`);
-  process.stdout.write(`  CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n`);
+  process.stdout.write(`  default model=claude-3-5-haiku-latest\n`);
+  process.stdout.write(`  modelPicker: ${anthropicNamed.length} alias(es) registered\n`);
 }
 
 function uninstallClaudeCode(): void {
@@ -77,6 +109,7 @@ function uninstallClaudeCode(): void {
     const env = (j.env && typeof j.env === "object" ? j.env : {}) as Record<string, unknown>;
     delete env.ANTHROPIC_BASE_URL;
     delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.CLAUDE_CODE_USE_GATEWAY;
     delete env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY;
     delete env.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT;
     delete env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
@@ -163,6 +196,7 @@ export function shellInstall(): void {
   const lines = [
     `export ANTHROPIC_BASE_URL="http://${host}"`,
     `export ANTHROPIC_AUTH_TOKEN="claude-proxy"`,
+    `export CLAUDE_CODE_USE_GATEWAY=1`,
     `export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`,
     `export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`,
     `export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`,
@@ -175,11 +209,19 @@ export function shellInstall(): void {
           ? [
               `set -gx ANTHROPIC_BASE_URL "http://${host}"`,
               `set -gx ANTHROPIC_AUTH_TOKEN "claude-proxy"`,
+              `set -gx CLAUDE_CODE_USE_GATEWAY 1`,
               `set -gx CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1`,
               `set -gx CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT 1`,
               `set -gx CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS 1`,
             ]
-          : lines;
+          : [
+              `export ANTHROPIC_BASE_URL="http://${host}"`,
+              `export ANTHROPIC_AUTH_TOKEN="claude-proxy"`,
+              `export CLAUDE_CODE_USE_GATEWAY=1`,
+              `export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`,
+              `export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`,
+              `export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`,
+            ];
       appendToShellRc(sh.rcPath, fullLines);
       process.stdout.write(`wrote ${sh.rcPath} (${sh.name})\n`);
     } catch (e) {
