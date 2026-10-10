@@ -154,8 +154,13 @@ function cmdShellUninstall(): void {
 async function cmdServe(argv: string[]): Promise<void> {
   const opts = parseFlags(argv);
   const config = loadConfig();
-  // Accept both --port (legacy) and --listen-port (avoids Bun's runtime flag).
-  const portArg = opts["listen-port"] ?? opts.port;
+  // Accept --listen-port / --port CLI flag, the CLAUDE_PROXY_PORT env var,
+  // and the config file (in that order of precedence). Bun's runtime
+  // strips both --port and --listen-port from process.argv before our
+  // code sees them in compiled binaries, so the env var is the only
+  // reliable way to override at runtime.
+  const envPort = process.env.CLAUDE_PROXY_PORT;
+  const portArg = opts["listen-port"] ?? opts.port ?? envPort;
   if (portArg) config.port = Number(portArg);
   if (opts.bind) config.bind = String(opts.bind);
   const port = config.port ?? DEFAULT_PORT;
