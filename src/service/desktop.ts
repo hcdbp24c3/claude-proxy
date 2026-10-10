@@ -52,19 +52,27 @@ function installClaudeCode(): void {
   // is surfaced instead of being silently retried at the wrong size.
   env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
   // Use a small default background model so compact tasks don't all need
-  // a paid Claude slot.
+  // a paid Claude slot. Use the first registered alias if it has "haiku"
+  // in the name, otherwise skip this — pointing HAIKU at a non-Anthropic
+  // model makes Claude Code error out at every compact call.
   if (!env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
-    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-3-5-haiku-latest";
+    const haikuAlias = cfg.models.find((m) => /haiku/i.test(m.name));
+    if (haikuAlias) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haikuAlias.name;
   }
   existing.env = env;
 
   // Set the default model. When the user runs /model, the picker is
-  // anchored to this name. We also write a `modelPicker` lineup so that
-  // the registered aliases show up as additional rows in the picker
-  // (Claude Code shows Anthropic model IDs that aren't built-in aliases
-  // as their own labeled rows when reachable through ANTHROPIC_BASE_URL).
+  // anchored to this name. Don't pin to a built-in claude-* model — most
+  // non-Anthropic upstreams don't serve them, and Claude Code errors out
+  // hard when the default model isn't recognized upstream. Use the first
+  // registered alias instead; if none, fall back to the "haiku" alias.
   if (!existing.model) {
-    existing.model = "claude-3-5-haiku-latest";
+    if (cfg.models.length > 0) {
+      const firstAlias = cfg.models[0]!;
+      existing.model = firstAlias.name;
+    } else {
+      existing.model = "haiku";
+    }
   }
 
   // Build a `modelPicker` lineup from the current proxy config so the
@@ -73,20 +81,25 @@ function installClaudeCode(): void {
   // the picker's filter (which keeps entries with those substrings) does
   // not silently drop them; for everything else, the user can still
   // switch with `claude --model <name>`.
-  const pickerCfg = loadConfig();
-  const anthropicNamed = pickerCfg.models.filter((m) => /claude|anthropic/i.test(m.name));
+  const anthropicNamed = cfg.models.filter((m) => /claude|anthropic/i.test(m.name));
   if (anthropicNamed.length > 0) {
+    const anchor = (typeof existing.model === "string" && /claude|anthropic/i.test(existing.model))
+      ? existing.model
+      : anthropicNamed[0]!.name;
     existing.modelPicker = {
       // Don't replace built-ins — append to them. Claude Code merges lineups
       // when `replaceBuiltInOptions` is not set, so the user's pickers stay.
       lines: [
-        { model: "haiku", description: "Fast, low-cost tasks" },
-        ...anthropicNamed.slice(0, 8).map((m) => ({
-          // Don't double-prefix when the alias already starts with claude-/
-          // anthropic-; the router strips one prefix back off on inbound.
-          model: /^(claude|anthropic)-/i.test(m.name) ? m.name : `claude-${m.name}`,
-          description: m.label ?? `routed via claude-proxy → ${m.name}`,
-        })),
+        { model: anchor, description: "Default for new sessions" },
+        ...anthropicNamed
+          .filter((m) => m.name !== anchor)
+          .slice(0, 8)
+          .map((m) => ({
+            // Don't double-prefix when the alias already starts with claude-/
+            // anthropic-; the router strips one prefix back off on inbound.
+            model: /^(claude|anthropic)-/i.test(m.name) ? m.name : `claude-${m.name}`,
+            description: m.label ?? `routed via claude-proxy → ${m.name}`,
+          })),
       ],
     };
   }
@@ -94,7 +107,7 @@ function installClaudeCode(): void {
   writeFileSync(settingsPath, JSON.stringify(existing, null, 2) + "\n", "utf8");
   process.stdout.write(`wrote ${settingsPath}\n`);
   process.stdout.write(`  ANTHROPIC_BASE_URL=http://${host}\n`);
-  process.stdout.write(`  default model=claude-3-5-haiku-latest\n`);
+  process.stdout.write(`  default model=${String(existing.model)}\n`);
   process.stdout.write(`  modelPicker: ${anthropicNamed.length} alias(es) registered\n`);
 }
 
